@@ -170,14 +170,57 @@ for each public company. Grading uses a private set of about 20 unseen
 companies with the same tools and the same answer key rules, but different
 names and wording, and scores your 3 points only.
 
-## Homework 3 solution:
-> to students: this is your report, see the homework description.
+## Homework 3 solution
 
 ### My 3 points and rules
-> for each point: why you chose it, your PASS rule in one or two sentences, and the evidence it uses. Quote Fisher where it helps.
+
+Points 1, 5, and 6 address sales growth, the level of profitability, and whether margins hold up over time. The assignment provides order, cost, and industry data for all three. A shared query supports three separate judgments.
+
+| Point | Why I chose it and evidence used | PASS rule |
+| --- | --- | --- |
+| **1. Sales growth potential** | Historical sales growth gives a measurable proxy for market potential. I sum FY2023 and FY2025 order amounts and use `company.industry` to select the corresponding `industry_medians.revenue_growth_2y_pct`. | Cumulative revenue growth from FY2023 to FY2025 must be positive and at least as high as the industry benchmark. The calculation is `100 × (FY2025 revenue − FY2023 revenue) / FY2023 revenue`. |
+| **5. Worthwhile profit margin** | Comparing with the company's industry gives the margin an economic reference point. I use FY2025 order revenue and the three cost fields in `monthly_costs`, then compare with `industry_medians.operating_margin_pct`. | The FY2025 operating margin must be positive and at least as high as the industry median. |
+| **6. Maintaining or improving margins** | A strong margin in one year can coexist with margin erosion. I calculate operating margins for FY2023, FY2024, and FY2025 from the same revenue and cost fields. | The FY2025 operating margin must be at least the FY2023 margin. FY2024 appears in the summary when available and provides context for the change. |
+
+Operating margin (%) is `100 × (revenue − cost of sales − selling and admin − R&D) / revenue`. Each annual revenue total requires 12 order months, non-null amounts, and positive total revenue. Each annual margin also requires 12 distinct monthly cost records and all three cost fields. A point receives **FAIL** if it fails its rule or if its required evidence is unavailable. The summary identifies insufficient evidence when that is the reason.
 
 ### Design
-> a visualization of your agent design and one paragraph describing it.
+
+```mermaid
+flowchart TD
+    A["Runner creates company tools and builds one LangChain model chain"] --> B["analyze_companies: up to three companies at once"]
+    B --> C["sql_query(query): aggregate FY2023 to FY2025 and FY2025 Q4"]
+    C --> D{"Required SQL result usable?"}
+    D -->|No| E["Return FAIL verdicts with an insufficient-evidence note"]
+    D -->|Yes| F["Python checks data and calculates Points 1, 5, and 6"]
+    F --> G["list_documents() and read_document(name): locate and read the Q4 call if available"]
+    G --> H["interview(competitor, competitive_edge): obtain one competitor observation"]
+    H --> I["Python checks Q4 revenue and builds the financial summary"]
+    I --> J{"Quotable interview available?"}
+    J -->|Yes| K["ChatDeepSeek selects INTERVIEW or NONE"]
+    J -->|No| M["Keep the calculated verdicts and available findings"]
+    K -->|INTERVIEW| L["Python appends the attributed source quote"]
+    K -->|NONE, invalid output, or request failure| M
+    I -.->|Optional evidence processing error| M
+    L --> M
+    E --> N["Runner writes results.csv and scores against labels when present"]
+    M --> N
+```
+
+Python calls the four supplied LangChain tools with `.ainvoke()`. One read-only SQL query aggregates orders and monthly costs separately by period and looks up the company's industry benchmarks. Python parses the results and uses `Decimal` for the calculations and verdicts. It then checks whether the Q4 FY2025 earnings-call revenue agrees with the SQL total after aligning units and reporting precision. A LangChain prompt chain with `ChatDeepSeek` and a string output parser uses `deepseek-v4-flash` to select whether the competitor observation belongs in the summary. Python accepts `INTERVIEW` and appends the source quote with attribution, or keeps the deterministic summary when the quote or model response is unusable. Python fixes the verdicts before the model selects a quote. The runner loads the public labels after the company analyses are complete.
 
 ### Results
-> your point score on `public_test`, the companies where your verdicts disagree with the public answers, and why.
+
+The official run on `public_test` processed **20 companies** in **5.593 seconds** and returned **60/60 correct verdicts** and **100.0% balanced accuracy**. All **20** model requests succeeded, and **32 offline tests** passed.
+
+| Point | Correct | True PASS correct | True FAIL correct | Balanced accuracy |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 20/20 | 14/14 | 6/6 | 100.0% |
+| 5 | 20/20 | 14/14 | 6/6 | 100.0% |
+| 6 | 20/20 | 14/14 | 6/6 | 100.0% |
+
+**All companies matched the public labels.** One evidence conflict was recorded. Bramble Labs reported **USD 70.5 million** of Q4 revenue, while the order totals returned **USD 65.6219 million**. The summary flagged the discrepancy, and all three verdicts matched the public labels.
+
+### Limitations
+
+The schema names a two-year growth benchmark and leaves its calculation convention unspecified. Point 1 assumes a cumulative percentage, and historical growth is a proxy for future market potential. Point 6 compares the first and last years, so it can pass a company whose margin fell from FY2024 to FY2025. Statements with ambiguous periods or units are marked unverified. Missing required financial evidence produces a conservative FAIL, which could penalize a company with incomplete records. The public results cover one run on the provided sample. Confirming the growth benchmark's definition and checking how the rules behave with incomplete coverage would provide stronger evidence of generalization.
